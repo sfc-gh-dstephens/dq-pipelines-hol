@@ -1,29 +1,18 @@
--- ========================================================================
--- BrightCart Setup Script - Self-Contained
--- From Raw to Reliable: Build AI-Powered Data Quality Pipelines
--- Cortex Code Hands-On Lab
--- ========================================================================
--- No external dependencies. All data is generated inline.
--- Safe to re-run: uses TRUNCATE before each data load.
--- Run time: ~3 minutes
--- Requires: ACCOUNTADMIN role, Cortex features enabled
--- ========================================================================
-
 USE ROLE ACCOUNTADMIN;
 
 -- ========================================================================
 -- INFRASTRUCTURE
 -- ========================================================================
 
-CREATE WAREHOUSE IF NOT EXISTS BRIGHTCART_DQ_WH
+CREATE WAREHOUSE IF NOT EXISTS HOL_DQ_WH
     WAREHOUSE_SIZE = 'XSMALL'
     AUTO_SUSPEND  = 300
     AUTO_RESUME   = TRUE;
 
-USE WAREHOUSE BRIGHTCART_DQ_WH;
+USE WAREHOUSE HOL_DQ_WH;
 
-CREATE DATABASE IF NOT EXISTS BRIGHTCART_DQ;
-USE DATABASE BRIGHTCART_DQ;
+CREATE OR REPLACE DATABASE HOL_DQ;
+USE DATABASE HOL_DQ;
 
 CREATE SCHEMA IF NOT EXISTS RAW;
 CREATE SCHEMA IF NOT EXISTS CLEAN;
@@ -43,7 +32,8 @@ CREATE TABLE IF NOT EXISTS RAW.ORDERS (
     order_date        DATE,
     status            VARCHAR(20),    -- PENDING, PROCESSING, SHIPPED, DELIVERED
     shipping_address  VARCHAR(200),
-    region            VARCHAR(20)
+    region            VARCHAR(20),
+    customer_notes    VARCHAR(500)    -- free-text feedback; ~30% populated
 );
 
 CREATE TABLE IF NOT EXISTS RAW.CUSTOMERS (
@@ -123,13 +113,40 @@ SELECT
         WHEN 2 THEN 'SOUTH'
         WHEN 3 THEN 'EAST'
         ELSE 'WEST'
-    END AS region
+    END AS region,
+    CASE
+        WHEN UNIFORM(1, 100, RANDOM()) <= 10
+            THEN CASE UNIFORM(1, 5, RANDOM())
+                WHEN 1 THEN 'Excellent service, arrived ahead of schedule!'
+                WHEN 2 THEN 'Love this product, will order again.'
+                WHEN 3 THEN 'Great quality and fast shipping.'
+                WHEN 4 THEN 'Perfect, exactly as described.'
+                ELSE 'Very satisfied with my purchase.'
+            END
+        WHEN UNIFORM(1, 100, RANDOM()) <= 20
+            THEN CASE UNIFORM(1, 5, RANDOM())
+                WHEN 1 THEN 'Item arrived damaged, requesting replacement.'
+                WHEN 2 THEN 'Wrong item shipped. Very disappointed.'
+                WHEN 3 THEN 'Terrible experience. Product defective on arrival.'
+                WHEN 4 THEN 'Waited 3 weeks and still no delivery. Unacceptable.'
+                ELSE 'Package was open when it arrived. Not happy at all.'
+            END
+        WHEN UNIFORM(1, 100, RANDOM()) <= 30
+            THEN CASE UNIFORM(1, 5, RANDOM())
+                WHEN 1 THEN 'Decent product but shipping was slow.'
+                WHEN 2 THEN 'Ok quality for the price. Nothing special.'
+                WHEN 3 THEN 'Works fine but packaging could be better.'
+                WHEN 4 THEN 'Average experience overall.'
+                ELSE 'Product is fine, delivery took longer than expected.'
+            END
+        ELSE NULL
+    END AS customer_notes
 FROM TABLE(GENERATOR(ROWCOUNT => 5000));
 
 -- Inject ~150 duplicate order_ids (simulates upstream deduplication failures)
 INSERT INTO RAW.ORDERS
 SELECT order_id, customer_id, product_id, quantity, unit_price,
-       order_total, order_date, status, shipping_address, region
+       order_total, order_date, status, shipping_address, region, customer_notes
 FROM (
     SELECT *, ROW_NUMBER() OVER (ORDER BY RANDOM()) AS rn
     FROM RAW.ORDERS
@@ -149,10 +166,10 @@ SELECT
         WHEN UNIFORM(1, 100, RANDOM()) <= 2
             THEN 'user' || SEQ4()::VARCHAR || 'nodomain.com'      -- missing @
         WHEN UNIFORM(1, 100, RANDOM()) <= 4
-            THEN '@brightcart.com'                                  -- missing local part
+            THEN '@HOL.com'                                  -- missing local part
         WHEN UNIFORM(1, 100, RANDOM()) <= 5
-            THEN 'user' || SEQ4()::VARCHAR || '@@brightcart.com'   -- double @
-        ELSE 'user' || SEQ4()::VARCHAR || '@brightcart.com'
+            THEN 'user' || SEQ4()::VARCHAR || '@@HOL.com'   -- double @
+        ELSE 'user' || SEQ4()::VARCHAR || '@HOL.com'
     END AS email,
     CASE UNIFORM(1, 10, RANDOM())
         WHEN 1 THEN 'James'   WHEN 2 THEN 'Sarah'   WHEN 3 THEN 'Michael'
@@ -285,22 +302,16 @@ SELECT
 FROM TABLE(GENERATOR(ROWCOUNT => 4000));
 
 -- Inject NULL tracking_number on ~20% of DELIVERED shipments (~5% of total)
-UPDATE RAW.SHIPMENTS
+UPDATE HOL_DQ.RAW.SHIPMENTS
 SET tracking_number = NULL
 WHERE status = 'DELIVERED'
-  AND shipment_id IN (
-      SELECT shipment_id
-      FROM RAW.SHIPMENTS
-      WHERE status = 'DELIVERED'
-      ORDER BY RANDOM()
-      LIMIT (SELECT CEIL(COUNT(*) * 0.20)::INTEGER FROM RAW.SHIPMENTS WHERE status = 'DELIVERED')
-  );
+  AND UNIFORM(1, 5, RANDOM()) = 1;
 
 -- ========================================================================
 -- VERIFY: Paste this prompt into Cortex Code to confirm data loaded
 -- ========================================================================
 --
---   Show me row counts for all tables in BRIGHTCART_DQ.RAW
+--   Show me row counts for all tables in HOL_DQ.RAW
 --
 -- Expected output:
 --   ORDERS     ~5,150
@@ -310,9 +321,9 @@ WHERE status = 'DELIVERED'
 --   SHIPMENTS   4,000
 --
 -- ========================================================================
-SELECT 'RAW.ORDERS'    AS table_name, COUNT(*) AS row_count FROM BRIGHTCART_DQ.RAW.ORDERS    UNION ALL
-SELECT 'RAW.CUSTOMERS'               , COUNT(*)             FROM BRIGHTCART_DQ.RAW.CUSTOMERS  UNION ALL
-SELECT 'RAW.PRODUCTS'                , COUNT(*)             FROM BRIGHTCART_DQ.RAW.PRODUCTS   UNION ALL
-SELECT 'RAW.INVENTORY'               , COUNT(*)             FROM BRIGHTCART_DQ.RAW.INVENTORY  UNION ALL
-SELECT 'RAW.SHIPMENTS'               , COUNT(*)             FROM BRIGHTCART_DQ.RAW.SHIPMENTS
+SELECT 'RAW.ORDERS'    AS table_name, COUNT(*) AS row_count FROM HOL_DQ.RAW.ORDERS    UNION ALL
+SELECT 'RAW.CUSTOMERS'               , COUNT(*)             FROM HOL_DQ.RAW.CUSTOMERS  UNION ALL
+SELECT 'RAW.PRODUCTS'                , COUNT(*)             FROM HOL_DQ.RAW.PRODUCTS   UNION ALL
+SELECT 'RAW.INVENTORY'               , COUNT(*)             FROM HOL_DQ.RAW.INVENTORY  UNION ALL
+SELECT 'RAW.SHIPMENTS'               , COUNT(*)             FROM HOL_DQ.RAW.SHIPMENTS
 ORDER BY table_name;

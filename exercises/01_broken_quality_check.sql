@@ -18,7 +18,7 @@ SELECT
         COUNT(CASE WHEN customer_id IS NULL THEN 1 END) * 100.0
         / NULLIF(COUNT(*), 0), 2
     )                                                             AS null_pct
-FROM BRIGHTCART_DQ.ORDR.ORDERS
+FROM HOL_DQ.ORDR.ORDERS
 GROUP BY region
 ORDER BY total_orders DESC;
 
@@ -27,7 +27,7 @@ ORDER BY total_orders DESC;
 --   Fix method: Select "order_totl" → click Add to Chat → type
 --     "Fix this column name typo — the correct column is order_total"
 --
--- ERROR 2: BRIGHTCART_DQ.ORDR.ORDERS  →  BRIGHTCART_DQ.RAW.ORDERS  (schema typo)
+-- ERROR 2: HOL_DQ.ORDR.ORDERS  →  HOL_DQ.RAW.ORDERS  (schema typo)
 --   Fix method: Run the query → get runtime error → click the Fix button
 --     CoCo corrects ORDR → RAW in a diff view → click Keep all in file
 --
@@ -35,25 +35,3 @@ ORDER BY total_orders DESC;
 --   Fix method: Run the query → get invalid identifier error → click Fix
 --     CoCo introspects the actual table schema and finds the correct column name
 -- -----------------------------------------------------------------------
-
-
--- ========================================================================
--- FALLBACK (presenter use only — paste if CoCo stalls)
--- ========================================================================
-SELECT
-    region,
-    COUNT(*)                                                      AS total_orders,
-    COUNT(CASE WHEN customer_id IS NULL THEN 1 END)               AS null_customer_count,
-    COUNT(CASE WHEN order_total < 0 THEN 1 END)                   AS negative_total_count,
-    COUNT(CASE WHEN shipping_address IS NULL THEN 1 END)          AS missing_address_count,
-    ROUND(
-        COUNT(CASE WHEN customer_id IS NULL THEN 1 END) * 100.0
-        / NULLIF(COUNT(*), 0), 2
-    )                                                             AS null_pct
-FROM BRIGHTCART_DQ.RAW.ORDERS
-GROUP BY region
-ORDER BY total_orders DESC;
-
--- Expected: 4 rows (NORTH, SOUTH, EAST, WEST)
--- null_pct should be ~7–9% for each region
--- negative_total_count should be ~25–30 total across all regions

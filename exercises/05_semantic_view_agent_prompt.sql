@@ -7,12 +7,10 @@
 -- ========================================================================
 -- COCO PROMPT 1: Create the Semantic View
 -- -----------------------------------------------------------------------
--- Paste into the Cortex Code panel:
--- -----------------------------------------------------------------------
 /*
-Create a semantic view BRIGHTCART_DQ.SEMANTIC.ORDER_QUALITY over these tables:
-  - BRIGHTCART_DQ.CLEAN.VALIDATED_ORDERS  (primary)
-  - BRIGHTCART_DQ.RAW.CUSTOMERS
+Create a semantic view HOL_DQ.SEMANTIC.ORDER_QUALITY over these tables:
+  - HOL_DQ.CLEAN.VALIDATED_ORDERS  (primary)
+  - HOL_DQ.RAW.CUSTOMERS
 
 Join VALIDATED_ORDERS to CUSTOMERS on CUSTOMER_ID.
 
@@ -33,47 +31,12 @@ Execute the SQL.
 -- -----------------------------------------------------------------------
 
 
--- FALLBACK (presenter use only):
-CREATE OR REPLACE SEMANTIC VIEW BRIGHTCART_DQ.SEMANTIC.ORDER_QUALITY
-  TABLES (
-      BRIGHTCART_DQ.CLEAN.VALIDATED_ORDERS AS ORDERS PRIMARY KEY (ORDER_ID),
-      BRIGHTCART_DQ.RAW.CUSTOMERS          AS CUSTOMERS PRIMARY KEY (CUSTOMER_ID)
-  )
-  RELATIONSHIPS (
-      ORDERS (CUSTOMER_ID) REFERENCES CUSTOMERS (CUSTOMER_ID)
-  )
-  FACTS (
-      ORDERS.ORDER_TOTAL,
-      ORDERS.QUALITY_SCORE
-  )
-  DIMENSIONS (
-      ORDERS.REGION,
-      ORDERS.QUALITY_STATUS,
-      ORDERS.STATUS,
-      CUSTOMERS.TIER
-  )
-  METRICS (
-      MEASURE total_orders         AS COUNT(ORDERS.ORDER_ID),
-      MEASURE clean_order_count    AS COUNT_IF(ORDERS.QUALITY_STATUS = 'CLEAN'),
-      MEASURE rejected_count       AS COUNT_IF(ORDERS.QUALITY_STATUS = 'REJECTED'),
-      MEASURE review_needed_count  AS COUNT_IF(ORDERS.QUALITY_STATUS = 'REVIEW_NEEDED'),
-      MEASURE clean_order_rate     AS ROUND(
-                                       COUNT_IF(ORDERS.QUALITY_STATUS = 'CLEAN') * 100.0
-                                       / NULLIF(COUNT(ORDERS.ORDER_ID), 0), 2),
-      MEASURE avg_quality_score    AS ROUND(AVG(ORDERS.QUALITY_SCORE), 1),
-      MEASURE null_customer_count  AS COUNT_IF(ORDERS.CUSTOMER_ID IS NULL),
-      MEASURE negative_total_count AS COUNT_IF(ORDERS.ORDER_TOTAL < 0)
-  );
-
-
 -- ========================================================================
 -- COCO PROMPT 2: Create the Cortex Agent
 -- -----------------------------------------------------------------------
--- Paste into the Cortex Code panel:
--- -----------------------------------------------------------------------
 /*
-Create a Cortex Agent called BRIGHTCART_QUALITY_AGENT in
-BRIGHTCART_DQ.SEMANTIC. Attach the BRIGHTCART_DQ.SEMANTIC.ORDER_QUALITY
+Create a Cortex Agent called HOL_QUALITY_AGENT in
+HOL_DQ.SEMANTIC. Attach the HOL_DQ.SEMANTIC.ORDER_QUALITY
 semantic view as a Cortex Analyst tool.
 
 Use these response instructions: respond concisely with bullet points,
@@ -88,27 +51,11 @@ Execute the SQL.
 -- -----------------------------------------------------------------------
 
 
--- FALLBACK (presenter use only):
-CREATE OR REPLACE CORTEX AGENT BRIGHTCART_DQ.SEMANTIC.BRIGHTCART_QUALITY_AGENT
-    ENABLED = TRUE
-    COMMENT  = 'BrightCart data quality monitoring agent — powered by Cortex Code HOL'
-    TOOLS    = (
-        BRIGHTCART_DQ.SEMANTIC.ORDER_QUALITY TYPE CORTEX_ANALYST_TOOL
-    )
-    TOOL_RESOURCES = (
-        CORTEX_ANALYST_TOOL_RESOURCES = (
-            SEMANTIC_MODELS = (BRIGHTCART_DQ.SEMANTIC.ORDER_QUALITY)
-        )
-    );
-
-GRANT USAGE ON CORTEX AGENT BRIGHTCART_DQ.SEMANTIC.BRIGHTCART_QUALITY_AGENT TO ROLE PUBLIC;
-
-
 -- ========================================================================
 -- TEST IN SNOWFLAKE INTELLIGENCE
 -- ========================================================================
 -- 1. Navigate to AI & ML → Agents → Snowflake Intelligence tab
--- 2. Click "Add existing agent", search BRIGHTCART_QUALITY_AGENT, confirm
+-- 2. Click "Add existing agent", search HOL_QUALITY_AGENT, confirm
 -- 3. Switch to Snowflake Intelligence and test these prompts:
 --
 --   "Which region has the highest rejection rate and what's causing it?"
