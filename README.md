@@ -9,7 +9,7 @@ In this quickstart you will use **Cortex Code**, the AI coding assistant built i
 ### Prerequisites
 
 - A Snowflake account with the **ACCOUNTADMIN** role (or a role with sufficient privileges)
-- Cortex Code enabled in your Snowflake environment (**Settings → Cortex Code → toggle on**)
+- Cortex Code enabled in your Snowflake environment
 - A modern web browser
 - Approximately 50 minutes
 
