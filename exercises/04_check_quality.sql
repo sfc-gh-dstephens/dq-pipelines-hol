@@ -1,41 +1,42 @@
 -- ========================================================================
--- Exercise 2b: Freshness Data Metric Function
+-- Exercise 4: Check Quality Results
 -- From Raw to Reliable: Build AI-Powered Data Quality Pipelines
 -- ========================================================================
--- Monitor how stale your data is using the system FRESHNESS DMF.
+-- Now that data has been loaded, check DMF results and evaluate
+-- expectations to see quality violations.
 -- ========================================================================
 
 
 -- ========================================================================
--- COCO PROMPT 1: Attach FRESHNESS DMF to RAW.ORDERS
+-- COCO PROMPT 1: Query DMF results from monitoring view
 -- -----------------------------------------------------------------------
 /*
-Attach the system Data Metric Function SNOWFLAKE.CORE.FRESHNESS to
-HOL_DQ.RAW.ORDERS on the ORDER_DATE column with a schedule of
-TRIGGER_ON_CHANGES. Then query INFORMATION_SCHEMA.DATA_METRIC_FUNCTION_REFERENCES
-to confirm it's attached. Execute the SQL.
+Show me the latest Data Metric Function results for
+HOL_DQ.RAW.ORDERS from SNOWFLAKE.LOCAL.DATA_QUALITY_MONITORING_RESULTS.
+Include the metric name, value, and measurement timestamp.
+Order by measurement timestamp descending.
+*/
+-- -----------------------------------------------------------------------
+
+-- NOTE: DMF results may take 1-2 minutes to appear after data insertion.
+
+
+-- ========================================================================
+-- COCO PROMPT 2: Evaluate expectations on demand
+-- -----------------------------------------------------------------------
+/*
+Call SYSTEM$EVALUATE_DATA_QUALITY_EXPECTATIONS for HOL_DQ.RAW.ORDERS
+to test all expectations immediately. Execute the SQL.
 */
 -- -----------------------------------------------------------------------
 
 
 -- ========================================================================
--- COCO PROMPT 2: Check freshness manually
+-- COCO PROMPT 3: Check expectation violation history
 -- -----------------------------------------------------------------------
 /*
-Call SNOWFLAKE.CORE.FRESHNESS directly on the ORDER_DATE column of
-HOL_DQ.RAW.ORDERS. Convert the result from seconds to hours.
-Execute the SQL.
-*/
--- -----------------------------------------------------------------------
-
-
--- ========================================================================
--- COCO PROMPT 3: Query freshness results from monitoring view
--- -----------------------------------------------------------------------
-/*
-Query SNOWFLAKE.LOCAL.DATA_QUALITY_MONITORING_RESULTS for the FRESHNESS
-metric on HOL_DQ.RAW.ORDERS. Show the metric name, value in
-seconds, value converted to hours, and measurement timestamp. Order by
-measurement time descending, limit 10. Execute the SQL.
+Query SNOWFLAKE.LOCAL.DATA_QUALITY_MONITORING_EXPECTATION_STATUS for
+HOL_DQ.RAW.ORDERS. Show all columns, ordered by measurement_time
+descending, limit 20. Execute the SQL.
 */
 -- -----------------------------------------------------------------------

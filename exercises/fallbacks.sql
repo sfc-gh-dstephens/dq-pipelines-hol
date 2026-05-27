@@ -8,30 +8,147 @@
 
 
 -- ########################################################################
--- STEP 1: Fix Broken Quality Check
+-- STEP 1: Data Metric Functions & Freshness
 -- ########################################################################
+
+ALTER TABLE HOL_DQ.RAW.ORDERS
+    SET DATA_METRIC_SCHEDULE = 'TRIGGER_ON_CHANGES';
+
+-- Attach system DMFs
+ALTER TABLE HOL_DQ.RAW.ORDERS
+    ADD DATA METRIC FUNCTION SNOWFLAKE.CORE.NULL_COUNT
+        ON (CUSTOMER_ID);
+
+ALTER TABLE HOL_DQ.RAW.ORDERS
+    ADD DATA METRIC FUNCTION SNOWFLAKE.CORE.DUPLICATE_COUNT
+        ON (ORDER_ID);
+
+SELECT *
+FROM TABLE(
+    HOL_DQ.INFORMATION_SCHEMA.DATA_METRIC_FUNCTION_REFERENCES(
+        REF_ENTITY_NAME => 'HOL_DQ.RAW.ORDERS',
+        REF_ENTITY_DOMAIN => 'TABLE'
+    )
+);
+
+-- Custom DMF: negative totals
+CREATE OR REPLACE DATA METRIC FUNCTION HOL_DQ.RAW.NEGATIVE_TOTAL_COUNT(
+    arg_t TABLE(order_total FLOAT)
+)
+RETURNS NUMBER
+AS $$
+    SELECT COUNT(*)
+    FROM arg_t
+    WHERE order_total < 0
+$$;
+
+ALTER TABLE HOL_DQ.RAW.ORDERS ADD DATA METRIC FUNCTION HOL_DQ.RAW.NEGATIVE_TOTAL_COUNT ON (ORDER_TOTAL);
+
+-- AI-powered DMF: suspicious addresses
+CREATE OR REPLACE DATA METRIC FUNCTION HOL_DQ.RAW.AI_SUSPICIOUS_ADDRESS_COUNT(
+    ARG_T TABLE(ARG_C VARCHAR(200))
+)
+RETURNS NUMBER
+AS
+$$
+    SELECT COUNT(*)
+    FROM ARG_T
+    WHERE ARG_C IS NOT NULL
+      AND SNOWFLAKE.CORTEX.AI_FILTER(PROMPT('This is a real US shipping address: {0}', ARG_C)) = FALSE
+$$;
+
+ALTER TABLE HOL_DQ.RAW.ORDERS ADD DATA METRIC FUNCTION HOL_DQ.RAW.AI_SUSPICIOUS_ADDRESS_COUNT ON (SHIPPING_ADDRESS);
+
+-- Freshness DMF
+ALTER TABLE HOL_DQ.RAW.ORDERS ADD DATA METRIC FUNCTION SNOWFLAKE.CORE.FRESHNESS ON (ORDER_DATE);
 
 SELECT
-    region,
-    COUNT(*)                                                      AS total_orders,
-    COUNT(CASE WHEN customer_id IS NULL THEN 1 END)               AS null_customer_count,
-    COUNT(CASE WHEN order_total < 0 THEN 1 END)                   AS negative_total_count,
-    COUNT(CASE WHEN shipping_address IS NULL THEN 1 END)          AS missing_address_count,
-    ROUND(
-        COUNT(CASE WHEN customer_id IS NULL THEN 1 END) * 100.0
-        / NULLIF(COUNT(*), 0), 2
-    )                                                             AS null_pct
-FROM HOL_DQ.RAW.ORDERS
-GROUP BY region
-ORDER BY total_orders DESC;
+    SNOWFLAKE.CORE.FRESHNESS(SELECT ORDER_DATE FROM HOL_DQ.RAW.ORDERS) AS freshness_seconds,
+    ROUND(SNOWFLAKE.CORE.FRESHNESS(SELECT ORDER_DATE FROM HOL_DQ.RAW.ORDERS) / 3600.0, 1) AS freshness_hours;
 
--- Expected: 4 rows (NORTH, SOUTH, EAST, WEST)
--- null_pct should be ~7–9% for each region
--- negative_total_count should be ~25–30 total across all regions
+
 
 
 -- ########################################################################
--- STEP 2a: AI-Powered Enrichment Pipeline
+-- STEP 2: Expectations
+-- ########################################################################
+
+ALTER TABLE HOL_DQ.RAW.ORDERS
+  MODIFY DATA METRIC FUNCTION HOL_DQ.RAW.NEGATIVE_TOTAL_COUNT ON (ORDER_TOTAL)
+    ADD EXPECTATION few_negatives (VALUE < 50);
+
+ALTER TABLE HOL_DQ.RAW.ORDERS
+  MODIFY DATA METRIC FUNCTION SNOWFLAKE.CORE.DUPLICATE_COUNT ON (ORDER_ID)
+    ADD EXPECTATION no_duplicates (VALUE = 0);
+
+ALTER TABLE HOL_DQ.RAW.ORDERS
+  MODIFY DATA METRIC FUNCTION SNOWFLAKE.CORE.NULL_COUNT ON (CUSTOMER_ID)
+    ADD EXPECTATION low_nulls (VALUE < 200);
+
+ALTER TABLE HOL_DQ.RAW.ORDERS
+  MODIFY DATA METRIC FUNCTION SNOWFLAKE.CORE.FRESHNESS ON (ORDER_DATE)
+    ADD EXPECTATION fresh_data (VALUE < 86400);
+
+
+
+
+-- ########################################################################
+-- STEP 3: Notifications
+-- ########################################################################
+
+CREATE OR REPLACE NOTIFICATION INTEGRATION HOL_DQ_EMAIL_INT
+    TYPE = EMAIL
+    ENABLED = TRUE
+    ALLOWED_RECIPIENTS = ('<email>');
+
+ALTER DATABASE HOL_DQ SET DATA_QUALITY_MONITORING_SETTINGS =
+  $$
+  notification:
+    enabled: TRUE
+    integrations:
+      - HOL_DQ_EMAIL_INT
+    cooldown_hours: 1
+    metadata_included: TRUE
+  $$;
+
+
+-- ########################################################################
+-- STEP 4: Check Quality Results (run after data insertion)
+-- ########################################################################
+
+-- Query DMF results
+SELECT
+    metric_name,
+    value,
+    measurement_time
+FROM SNOWFLAKE.LOCAL.DATA_QUALITY_MONITORING_RESULTS
+WHERE table_name  = 'ORDERS'
+  AND table_schema = 'RAW'
+  AND table_database = 'HOL_DQ'
+ORDER BY measurement_time DESC
+LIMIT 20;
+
+-- Manual DMF calls (if results not yet available)
+SELECT SNOWFLAKE.CORE.NULL_COUNT(SELECT CUSTOMER_ID FROM HOL_DQ.RAW.ORDERS);
+SELECT SNOWFLAKE.CORE.DUPLICATE_COUNT(SELECT ORDER_ID FROM HOL_DQ.RAW.ORDERS);
+SELECT HOL_DQ.RAW.NEGATIVE_TOTAL_COUNT(SELECT ORDER_TOTAL FROM HOL_DQ.RAW.ORDERS);
+
+-- Evaluate expectations on demand
+SELECT * FROM TABLE(SYSTEM$EVALUATE_DATA_QUALITY_EXPECTATIONS(
+    REF_ENTITY_NAME => 'HOL_DQ.RAW.ORDERS'));
+
+-- Check expectation violation history
+SELECT *
+FROM SNOWFLAKE.LOCAL.DATA_QUALITY_MONITORING_EXPECTATION_STATUS
+WHERE table_name = 'ORDERS'
+  AND table_schema = 'RAW'
+  AND table_database = 'HOL_DQ'
+ORDER BY measurement_time DESC
+LIMIT 20;
+
+
+-- ########################################################################
+-- STEP 5: AI-Powered Enrichment Pipeline
 -- ########################################################################
 
 -- AI_EXTRACT: structured address components
@@ -75,100 +192,7 @@ SELECT * FROM HOL_DQ.CLEAN.AI_ENRICHED_ORDERS LIMIT 5;
 
 
 -- ########################################################################
--- STEP 2b: Freshness DMF
--- ########################################################################
-
-ALTER TABLE HOL_DQ.RAW.ORDERS ADD DATA METRIC FUNCTION SNOWFLAKE.CORE.FRESHNESS ON (ORDER_DATE);
-
-SELECT
-    SNOWFLAKE.CORE.FRESHNESS(SELECT ORDER_DATE FROM HOL_DQ.RAW.ORDERS) AS freshness_seconds,
-    ROUND(SNOWFLAKE.CORE.FRESHNESS(SELECT ORDER_DATE FROM HOL_DQ.RAW.ORDERS) / 3600.0, 1) AS freshness_hours;
-
-SELECT
-    metric_name,
-    value AS freshness_seconds,
-    ROUND(value / 3600.0, 1) AS freshness_hours,
-    measurement_time
-FROM SNOWFLAKE.LOCAL.DATA_QUALITY_MONITORING_RESULTS
-WHERE table_name = 'ORDERS'
-  AND table_schema = 'RAW'
-  AND table_database = 'HOL_DQ'
-  AND metric_name = 'FRESHNESS'
-ORDER BY measurement_time DESC
-LIMIT 10;
-
-
--- ########################################################################
--- STEP 2: Data Metric Functions
--- ########################################################################
-
--- Attach system DMFs
-ALTER TABLE HOL_DQ.RAW.ORDERS
-    ADD DATA METRIC FUNCTION SNOWFLAKE.CORE.NULL_COUNT
-        ON (CUSTOMER_ID)
-    SCHEDULE = 'TRIGGER_ON_CHANGES';
-
-ALTER TABLE HOL_DQ.RAW.ORDERS
-    ADD DATA METRIC FUNCTION SNOWFLAKE.CORE.DUPLICATE_COUNT
-        ON (ORDER_ID)
-    SCHEDULE = 'TRIGGER_ON_CHANGES';
-
-SELECT *
-FROM TABLE(
-    INFORMATION_SCHEMA.DATA_METRIC_FUNCTION_REFERENCES(
-        REF_ENTITY_NAME => 'HOL_DQ.RAW.ORDERS',
-        REF_ENTITY_DOMAIN => 'TABLE'
-    )
-);
-
--- Custom DMF: negative totals
-CREATE OR REPLACE DATA METRIC FUNCTION HOL_DQ.RAW.NEGATIVE_TOTAL_COUNT(
-    arg_t TABLE(order_total FLOAT)
-)
-RETURNS NUMBER
-AS $$
-    SELECT COUNT(*)
-    FROM arg_t
-    WHERE order_total < 0
-$$;
-
-ALTER TABLE HOL_DQ.RAW.ORDERS ADD DATA METRIC FUNCTION HOL_DQ.RAW.NEGATIVE_TOTAL_COUNT ON (ORDER_TOTAL);
-
--- AI-powered DMF: suspicious addresses
-CREATE OR REPLACE DATA METRIC FUNCTION HOL_DQ.RAW.AI_SUSPICIOUS_ADDRESS_COUNT(
-    ARG_T TABLE(ARG_C VARCHAR(200))
-)
-RETURNS NUMBER
-AS
-$$
-    SELECT COUNT(*)
-    FROM ARG_T
-    WHERE ARG_C IS NOT NULL
-      AND SNOWFLAKE.CORTEX.AI_FILTER(PROMPT('This is a real US shipping address: {0}', ARG_C)) = FALSE
-$$
-
-ALTER TABLE HOL_DQ.RAW.ORDERS ADD DATA METRIC FUNCTION HOL_DQ.RAW.AI_SUSPICIOUS_ADDRESS_COUNT ON (SHIPPING_ADDRESS);
-
--- Query DMF results
-SELECT
-    metric_name,
-    value,
-    measurement_time
-FROM SNOWFLAKE.LOCAL.DATA_QUALITY_MONITORING_RESULTS
-WHERE table_name  = 'ORDERS'
-  AND table_schema = 'RAW'
-  AND table_database = 'HOL_DQ'
-ORDER BY measurement_time DESC
-LIMIT 20;
-
--- Manual DMF calls (if results not yet available)
-SELECT SNOWFLAKE.CORE.NULL_COUNT(SELECT CUSTOMER_ID FROM HOL_DQ.RAW.ORDERS);
-SELECT SNOWFLAKE.CORE.DUPLICATE_COUNT(SELECT ORDER_ID FROM HOL_DQ.RAW.ORDERS);
-SELECT HOL_DQ.RAW.NEGATIVE_TOTAL_COUNT(SELECT ORDER_TOTAL FROM HOL_DQ.RAW.ORDERS);
-
-
--- ########################################################################
--- STEP 3: Dynamic Table Pipeline
+-- STEP 6: Dynamic Table Pipeline
 -- ########################################################################
 
 CREATE OR REPLACE DYNAMIC TABLE HOL_DQ.CLEAN.VALIDATED_ORDERS
@@ -251,101 +275,59 @@ FROM TABLE(HOL_DQ.INFORMATION_SCHEMA.DYNAMIC_TABLE_REFRESH_HISTORY(
 ORDER BY refresh_start_time DESC
 LIMIT 5;
 
--- ########################################################################
--- STEP 4: Notifications & Expectations
--- ########################################################################
-
-CREATE OR REPLACE NOTIFICATION INTEGRATION HOL_DQ_EMAIL_INT
-    TYPE = EMAIL
-    ENABLED = TRUE
-    ALLOWED_RECIPIENTS = ('dexter.stephens@snowflake.com');
-
-ALTER DATABASE HOL_DQ SET DATA_QUALITY_MONITORING_SETTINGS =
-  $$
-  notification:
-    enabled: TRUE
-    integrations:
-      - HOL_DQ_EMAIL_INT
-    cooldown_hours: 1
-    metadata_included: TRUE
-  $$;
-
--- Add expectations to existing DMF associations
-ALTER TABLE HOL_DQ.RAW.ORDERS
-  MODIFY DATA METRIC FUNCTION HOL_DQ.RAW.NEGATIVE_TOTAL_COUNT ON (ORDER_TOTAL)
-    ADD EXPECTATION few_negatives (VALUE < 50);
-
-ALTER TABLE HOL_DQ.RAW.ORDERS
-  MODIFY DATA METRIC FUNCTION SNOWFLAKE.CORE.DUPLICATE_COUNT ON (ORDER_ID)
-    ADD EXPECTATION no_duplicates (VALUE = 0);
-
-ALTER TABLE HOL_DQ.RAW.ORDERS
-  MODIFY DATA METRIC FUNCTION SNOWFLAKE.CORE.NULL_COUNT ON (CUSTOMER_ID)
-    ADD EXPECTATION low_nulls (VALUE < 200);
-
-ALTER TABLE HOL_DQ.RAW.ORDERS
-  MODIFY DATA METRIC FUNCTION SNOWFLAKE.CORE.FRESHNESS ON (ORDER_DATE)
-    ADD EXPECTATION fresh_data (VALUE < 86400);
-
--- Test expectations on demand
-SELECT * FROM TABLE(SYSTEM$EVALUATE_DATA_QUALITY_EXPECTATIONS(
-    REF_ENTITY_NAME => 'HOL_DQ.RAW.ORDERS'));
-
--- Check expectation violation history
-SELECT *
-FROM SNOWFLAKE.LOCAL.DATA_QUALITY_MONITORING_EXPECTATION_STATUS
-WHERE table_name = 'ORDERS'
-  AND table_schema = 'RAW'
-  AND table_database = 'HOL_DQ'
-ORDER BY measurement_time DESC
-LIMIT 20;
-
 
 -- ########################################################################
--- STEP 5: Semantic View & Cortex Agent
+-- STEP 7: Semantic View & Cortex Agent
 -- ########################################################################
 
 CREATE OR REPLACE SEMANTIC VIEW HOL_DQ.SEMANTIC.ORDER_QUALITY
   TABLES (
-      HOL_DQ.CLEAN.VALIDATED_ORDERS AS ORDERS PRIMARY KEY (ORDER_ID),
-      HOL_DQ.RAW.CUSTOMERS          AS CUSTOMERS PRIMARY KEY (CUSTOMER_ID)
+      ORDERS AS HOL_DQ.CLEAN.VALIDATED_ORDERS PRIMARY KEY (ORDER_ID),
+      CUSTOMERS AS HOL_DQ.RAW.CUSTOMERS PRIMARY KEY (CUSTOMER_ID)
   )
   RELATIONSHIPS (
-      ORDERS (CUSTOMER_ID) REFERENCES CUSTOMERS (CUSTOMER_ID)
+      orders_to_customers AS ORDERS (CUSTOMER_ID) REFERENCES CUSTOMERS (CUSTOMER_ID)
   )
   FACTS (
-      ORDERS.ORDER_TOTAL,
-      ORDERS.QUALITY_SCORE
+      ORDERS.ORDER_TOTAL AS ORDER_TOTAL,
+      ORDERS.QUALITY_SCORE AS QUALITY_SCORE
   )
   DIMENSIONS (
-      ORDERS.REGION,
-      ORDERS.QUALITY_STATUS,
-      ORDERS.STATUS,
-      CUSTOMERS.TIER
+      ORDERS.REGION AS REGION,
+      ORDERS.QUALITY_STATUS AS QUALITY_STATUS,
+      ORDERS.STATUS AS STATUS,
+      CUSTOMERS.TIER AS TIER
   )
   METRICS (
-      MEASURE total_orders         AS COUNT(ORDERS.ORDER_ID),
-      MEASURE clean_order_count    AS COUNT_IF(ORDERS.QUALITY_STATUS = 'CLEAN'),
-      MEASURE rejected_count       AS COUNT_IF(ORDERS.QUALITY_STATUS = 'REJECTED'),
-      MEASURE review_needed_count  AS COUNT_IF(ORDERS.QUALITY_STATUS = 'REVIEW_NEEDED'),
-      MEASURE clean_order_rate     AS ROUND(
-                                       COUNT_IF(ORDERS.QUALITY_STATUS = 'CLEAN') * 100.0
-                                       / NULLIF(COUNT(ORDERS.ORDER_ID), 0), 2),
-      MEASURE avg_quality_score    AS ROUND(AVG(ORDERS.QUALITY_SCORE), 1),
-      MEASURE null_customer_count  AS COUNT_IF(ORDERS.CUSTOMER_ID IS NULL),
-      MEASURE negative_total_count AS COUNT_IF(ORDERS.ORDER_TOTAL < 0)
+      ORDERS.total_orders AS COUNT(ORDER_ID),
+      ORDERS.clean_order_count AS COUNT_IF(QUALITY_STATUS = 'CLEAN'),
+      ORDERS.rejected_count AS COUNT_IF(QUALITY_STATUS = 'REJECTED'),
+      ORDERS.review_needed_count AS COUNT_IF(QUALITY_STATUS = 'REVIEW_NEEDED'),
+      ORDERS.clean_order_rate AS ROUND(COUNT_IF(QUALITY_STATUS = 'CLEAN') * 100.0 / NULLIF(COUNT(ORDER_ID), 0), 2),
+      ORDERS.avg_quality_score AS ROUND(AVG(QUALITY_SCORE), 1),
+      ORDERS.null_customer_count AS COUNT_IF(CUSTOMER_ID IS NULL),
+      ORDERS.negative_total_count AS COUNT_IF(ORDER_TOTAL < 0)
   );
 
-CREATE OR REPLACE CORTEX AGENT HOL_DQ.SEMANTIC.HOL_QUALITY_AGENT
-    ENABLED = TRUE
-    COMMENT  = 'HOL data quality monitoring agent — powered by Cortex Code HOL'
-    TOOLS    = (
-        HOL_DQ.SEMANTIC.ORDER_QUALITY TYPE CORTEX_ANALYST_TOOL
-    )
-    TOOL_RESOURCES = (
-        CORTEX_ANALYST_TOOL_RESOURCES = (
-            SEMANTIC_MODELS = (HOL_DQ.SEMANTIC.ORDER_QUALITY)
-        )
-    );
+CREATE OR REPLACE AGENT HOL_DQ.SEMANTIC.HOL_QUALITY_AGENT
+  COMMENT = 'HOL data quality monitoring agent'
+  FROM SPECIFICATION
+  $$
+  models:
+    orchestration: auto
 
-GRANT USAGE ON CORTEX AGENT HOL_DQ.SEMANTIC.HOL_QUALITY_AGENT TO ROLE PUBLIC;
+  instructions:
+    response: "Respond concisely with bullet points. Always include a breakdown by region when relevant. Highlight the WEST region specifically when quality scores or rejection rates are a concern. Suggest a root cause for any metric that is more than 10% worse than the overall average."
+
+  tools:
+    - tool_spec:
+        type: "cortex_analyst_text_to_sql"
+        name: "OrderQualityAnalyst"
+        description: "Analyzes order quality metrics including rejection rates, quality scores, and data quality status across regions and customer tiers from the validated orders pipeline."
+
+  tool_resources:
+    OrderQualityAnalyst:
+      semantic_view: "HOL_DQ.SEMANTIC.ORDER_QUALITY"
+  $$;
+
+GRANT USAGE ON AGENT HOL_DQ.SEMANTIC.HOL_QUALITY_AGENT TO ROLE PUBLIC;

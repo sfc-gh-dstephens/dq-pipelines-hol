@@ -1,5 +1,5 @@
 -- ========================================================================
--- Exercise 3: Build a Validated Data Pipeline (Dynamic Table)
+-- Exercise 6: Build a Validated Data Pipeline (Dynamic Table)
 -- From Raw to Reliable: Build AI-Powered Data Quality Pipelines
 -- ========================================================================
 
@@ -15,7 +15,7 @@ It should read from HOL_DQ.RAW.ORDERS and do the following:
 - Deduplicate on ORDER_ID, keeping the row with the earliest ORDER_DATE
 - Reject rows where CUSTOMER_ID is NULL or ORDER_TOTAL is negative —
   these are hard quality failures
-- For remaining rows, compute a QUALITY_SCORE from 0–100:
+- For remaining rows, compute a QUALITY_SCORE from 0-100:
   start at 100 and subtract 20 if ORDER_TOTAL is zero, subtract 15
   if SHIPPING_ADDRESS is NULL, subtract 10 if the absolute difference
   between ORDER_TOTAL and (QUANTITY * UNIT_PRICE) exceeds 1.00

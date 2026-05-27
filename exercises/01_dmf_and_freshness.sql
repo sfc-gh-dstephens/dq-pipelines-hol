@@ -1,5 +1,5 @@
 -- ========================================================================
--- Exercise 2: Create Data Metric Functions
+-- Exercise 1: Data Metric Functions & Freshness
 -- From Raw to Reliable: Build AI-Powered Data Quality Pipelines
 -- ========================================================================
 
@@ -8,7 +8,7 @@
 -- COCO PROMPT 1: Attach system DMFs to RAW.ORDERS
 -- -----------------------------------------------------------------------
 /*
-Attach two system Data Metric Functions to @HOL_DQ.RAW.ORDERS:
+Attach two system Data Metric Functions to HOL_DQ.RAW.ORDERS:
 1. SNOWFLAKE.CORE.NULL_COUNT on the CUSTOMER_ID column
 2. SNOWFLAKE.CORE.DUPLICATE_COUNT on the ORDER_ID column
 
@@ -46,14 +46,26 @@ SHIPPING_ADDRESS column with TRIGGER_ON_CHANGES schedule. Execute the SQL.
 
 
 -- ========================================================================
--- COCO PROMPT 4: Query quality results
+-- COCO PROMPT 4: Attach FRESHNESS DMF to RAW.ORDERS
 -- -----------------------------------------------------------------------
 /*
-Show me the latest Data Metric Function results for
-HOL_DQ.RAW.ORDERS from SNOWFLAKE.LOCAL.DATA_QUALITY_MONITORING_RESULTS.
-Include the metric name, value, and measurement timestamp.
-Order by measurement timestamp descending.
+Attach the system Data Metric Function SNOWFLAKE.CORE.FRESHNESS to
+HOL_DQ.RAW.ORDERS on the ORDER_DATE column with a schedule of
+TRIGGER_ON_CHANGES. Then query INFORMATION_SCHEMA.DATA_METRIC_FUNCTION_REFERENCES
+to confirm it's attached. Execute the SQL.
 */
 -- -----------------------------------------------------------------------
 
--- NOTE: DMF results may take 1–2 minutes to appear after attachment.
+
+-- ========================================================================
+-- COCO PROMPT 5: Check freshness manually
+-- -----------------------------------------------------------------------
+/*
+Call SNOWFLAKE.CORE.FRESHNESS directly on the ORDER_DATE column of
+HOL_DQ.RAW.ORDERS. Convert the result from seconds to hours.
+Execute the SQL.
+*/
+-- -----------------------------------------------------------------------
+
+
+-- NOTE: DMF results will be checked in Exercise 4 after data is loaded.

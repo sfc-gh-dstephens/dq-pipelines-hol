@@ -1,5 +1,5 @@
 -- ========================================================================
--- Exercise 2a: AI-Powered Enrichment Pipeline
+-- Exercise 5: AI-Powered Enrichment Pipeline
 -- From Raw to Reliable: Build AI-Powered Data Quality Pipelines
 -- ========================================================================
 -- Use Cortex AI functions to structure, enrich, protect, and de-noise

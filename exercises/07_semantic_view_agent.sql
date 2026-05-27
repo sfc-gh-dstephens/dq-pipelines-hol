@@ -1,5 +1,5 @@
 -- ========================================================================
--- Exercise 5: Create a Quality Monitoring Agent
+-- Exercise 7: Create a Quality Monitoring Agent
 -- From Raw to Reliable: Build AI-Powered Data Quality Pipelines
 -- ========================================================================
 
