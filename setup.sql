@@ -1,2 +1,0 @@
--- THIS FILE HAS BEEN REMOVED.
--- Setup has moved to /setup/01_setup_infrastructure.sql and /setup/02_setup_data.sql
